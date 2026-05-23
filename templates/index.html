@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DVD Ripping Appliance</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>DVD Ripping Appliance</h1>
+            <p class="subtitle">Raspberry Pi Edition</p>
+        </header>
+
+        <div class="grid">
+            <section class="card" id="status-card">
+                <h2>System Status</h2>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <span class="label">DVD Drive</span>
+                        <span class="value" id="dvd-status">Checking...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">USB Output</span>
+                        <span class="value" id="usb-status">Checking...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Ripper</span>
+                        <span class="value" id="ripper-status">Idle</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card" id="settings-card">
+                <h2>Rip Settings</h2>
+                <form id="rip-form">
+                    <div class="form-group">
+                        <label for="disc-name">Disc Name</label>
+                        <input type="text" id="disc-name" placeholder="e.g. Show Season 1">
+                    </div>
+                    <div class="form-group">
+                        <label for="encoder">Encoder</label>
+                        <select id="encoder">
+                            <option value="x264">x264 (balanced)</option>
+                            <option value="x264_fast">x264 (fast)</option>
+                            <option value="x264_slow">x264 (high quality)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="quality">Quality (CRF)</label>
+                        <input type="range" id="quality" min="16" max="28" value="20">
+                        <span id="quality-value">20</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="upscale">Upscale</label>
+                        <select id="upscale">
+                            <option value="none">None (keep original)</option>
+                            <option value="720p">720p</option>
+                            <option value="1080p">1080p</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="subtitle">Subtitles</label>
+                        <select id="subtitle">
+                            <option value="none">None</option>
+                            <option value="soft">Soft (selectable)</option>
+                            <option value="burn">Burned-in</option>
+                        </select>
+                    </div>
+                    <div class="form-group checkbox">
+                        <input type="checkbox" id="deinterlace" checked>
+                        <label for="deinterlace">Deinterlace</label>
+                    </div>
+                    <div class="form-group checkbox">
+                        <input type="checkbox" id="play-all">
+                        <label for="play-all">Play All (all titles merged)</label>
+                    </div>
+                    <button type="submit" id="start-btn" class="btn primary">Start Ripping</button>
+                </form>
+            </section>
+
+            <section class="card" id="progress-card" style="display:none;">
+                <h2>Progress</h2>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="progress-step">Initializing...</span>
+                        <span id="progress-pct">0%</span>
+                    </div>
+                    <div class="progress-message" id="progress-message"></div>
+                    <div class="progress-elapsed" id="progress-elapsed"></div>
+                </div>
+            </section>
+
+            <section class="card" id="titles-card" style="display:none;">
+                <h2>Disc Titles</h2>
+                <div id="titles-list"></div>
+            </section>
+
+            <section class="card" id="drives-card">
+                <h2>USB Drives</h2>
+                <div id="drives-list">No USB drives detected</div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        const $ = (sel) => document.querySelector(sel);
+
+        let statusInterval;
+        let dvdInterval;
+
+        function formatTime(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            if (h > 0) return `${h}h ${m}m ${s}s`;
+            return `${m}m ${s}s`;
+        }
+
+        function updateStatus() {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    const card = $('#progress-card');
+                    const btn = $('#start-btn');
+
+                    if (data.running || data.step) {
+                        card.style.display = 'block';
+                        btn.disabled = data.running;
+                        btn.textContent = data.running ? 'Ripping...' : 'Start Ripping';
+
+                        $('#progress-fill').style.width = data.progress + '%';
+                        $('#progress-step').textContent = data.step.charAt(0).toUpperCase() + data.step.slice(1);
+                        $('#progress-pct').textContent = Math.round(data.progress) + '%';
+                        $('#progress-message').textContent = data.message || '';
+                        if (data.elapsed) {
+                            $('#progress-elapsed').textContent = 'Elapsed: ' + formatTime(data.elapsed);
+                        }
+
+                        const statusEl = $('#ripper-status');
+                        if (data.running) {
+                            statusEl.textContent = 'Running';
+                            statusEl.className = 'value running';
+                        } else if (data.complete) {
+                            statusEl.textContent = 'Complete';
+                            statusEl.className = 'value complete';
+                            $('#progress-message').textContent = 'Done! Output: ' + (data.output_file || 'unknown');
+                        } else if (data.error) {
+                            statusEl.textContent = 'Error';
+                            statusEl.className = 'value error';
+                            $('#progress-message').textContent = 'Error: ' + data.error;
+                        }
+                    }
+                });
+        }
+
+        function updateDVDStatus() {
+            fetch('/api/dvd_status?device=/dev/sr0')
+                .then(r => r.json())
+                .then(data => {
+                    const el = $('#dvd-status');
+                    if (data.inserted) {
+                        el.textContent = 'Disc inserted';
+                        el.className = 'value ok';
+                    } else {
+                        el.textContent = 'No disc';
+                        el.className = 'value';
+                    }
+                });
+        }
+
+        function updateDrives() {
+            fetch('/api/drives')
+                .then(r => r.json())
+                .then(data => {
+                    const el = $('#drives-list');
+                    const usbEl = $('#usb-status');
+                    if (data.drives && data.drives.length > 0) {
+                        const best = data.drives.reduce((a, b) => a.free_gb > b.free_gb ? a : b);
+                        usbEl.textContent = `${best.label} (${best.free_gb}GB free)`;
+                        usbEl.className = 'value ok';
+
+                        el.innerHTML = data.drives.map(d => `
+                            <div class="drive-item">
+                                <span class="drive-label">${d.label}</span>
+                                <span class="drive-info">${d.filesystem.toUpperCase()} | ${d.free_gb}GB / ${d.total_gb}GB</span>
+                                ${d.is_fat32 ? '<span class="warning">FAT32: 4GB limit</span>' : ''}
+                            </div>
+                        `).join('');
+                    } else {
+                        usbEl.textContent = 'No USB drive';
+                        usbEl.className = 'value warning';
+                        el.innerHTML = '<p class="muted">Plug in a USB drive for output</p>';
+                    }
+                });
+        }
+
+        $('#quality').addEventListener('input', (e) => {
+            $('#quality-value').textContent = e.target.value;
+        });
+
+        $('#rip-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const data = {
+                device: '/dev/sr0',
+                name: $('#disc-name').value,
+                encoder: $('#encoder').value,
+                quality: $('#quality').value,
+                play_all: $('#play-all').checked,
+                deinterlace: $('#deinterlace').checked,
+                upscale: $('#upscale').value,
+                subtitle: $('#subtitle').value,
+            };
+
+            fetch('/api/rip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.ok) {
+                    alert('Error: ' + data.error);
+                } else {
+                    $('#progress-card').style.display = 'block';
+                    updateStatus();
+                }
+            });
+        });
+
+        // Poll for updates
+        statusInterval = setInterval(updateStatus, 1000);
+        dvdInterval = setInterval(updateDVDStatus, 5000);
+        updateDVDStatus();
+        updateDrives();
+        updateStatus();
+    </script>
+</body>
+</html>

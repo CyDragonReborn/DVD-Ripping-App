@@ -1,0 +1,22 @@
+[Unit]
+Description=DVD Ripping Appliance Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/dvd-ripper
+ExecStart=/opt/dvd-ripper/venv/bin/python3 -m dvd_ripper.web
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security
+NoNewPrivileges=false
+ProtectSystem=false
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target
